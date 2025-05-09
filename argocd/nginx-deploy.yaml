@@ -1,0 +1,63 @@
+# This YAML defines a basic Nginx Deployment and a NodePort Service.
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  # Name of the Deployment
+  name: nginx-deployment
+  # Namespace where the Deployment will be created (optional, defaults to 'default')
+  # namespace: default
+spec:
+  # Number of desired replicas (Nginx pods)
+  replicas: 2
+  # Selector to find the pods managed by this Deployment
+  selector:
+    matchLabels:
+      app: nginx
+  # Template for the pods created by this Deployment
+  template:
+    metadata:
+      labels:
+        app: nginx # Labels applied to the pods
+    spec:
+      # Containers running in the pod
+      containers:
+      - name: nginx
+        # The Nginx image to use
+        image: nginx:latest
+        # Port the container listens on
+        ports:
+        - containerPort: 80
+        # Basic resource requests/limits (optional but recommended)
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  # Name of the Service
+  name: nginx-service
+  # Namespace where the Service will be created (should match the Deployment namespace)
+  # namespace: default
+spec:
+  # Selects the pods with the label 'app: nginx' to route traffic to
+  selector:
+    app: nginx
+  ports:
+    - protocol: TCP
+      # The port the Service listens on
+      port: 80
+      # The targetPort is the port the container is listening on (containerPort from Deployment)
+      targetPort: 80
+      # Type of Service: NodePort exposes the service on a port on each Node
+      # Optional: You can specify a specific nodePort in the 30000-32767 range,
+      # or let Kubernetes assign one automatically if omitted.
+      # nodePort: 3xxxx # Uncomment and replace with your desired port if needed
+  type: NodePort
