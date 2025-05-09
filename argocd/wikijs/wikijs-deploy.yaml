@@ -1,0 +1,255 @@
+# --- PostgreSQL PersistentVolumeClaim ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc # Name of the PVC
+  namespace: default # Added namespace
+  labels:
+    app: postgres
+spec:
+  accessModes:
+    - ReadWriteOnce # Can be mounted as read-write by a single node
+  resources:
+    requests:
+      storage: 10Gi # Request 10GB of storage. Adjust as needed.
+  # storageClassName: standard # Optional: Uncomment and specify if you don't have a default StorageClass
+
+---
+# --- PostgreSQL Deployment ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-deployment
+  namespace: default # Added namespace
+  labels:
+    app: postgres
+spec:
+  replicas: 1 # Typically run a single replica for a database unless using a distributed setup
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      volumes:
+        - name: postgres-persistent-storage
+          persistentVolumeClaim:
+            claimName: postgres-pvc # Must match the name of the PostgreSQL PVC
+
+      containers:
+        - name: postgres
+          image: postgres:13 # Using a stable PostgreSQL image
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432 # Default PostgreSQL port
+              name: postgres
+              protocol: TCP
+          env:
+            # --- Database Configuration ---
+            # These environment variables configure the PostgreSQL container
+            - name: POSTGRES_DB
+              value: wikijs # The database name Wiki.js will use
+            - name: POSTGRES_USER
+              value: wikijs # The database user Wiki.js will use
+            # Get the password from the Kubernetes Secret
+            - name: POSTGRES_PASSWORD
+              value: 1qaz2wsx!QAZ@WSX
+
+          volumeMounts:
+            - name: postgres-persistent-storage
+              mountPath: /var/lib/postgresql/data # Default data path for PostgreSQL
+
+          # Basic health checks
+          livenessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Resource requests and limits (adjust based on your needs)
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1024Mi
+
+---
+# --- PostgreSQL Service ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service # Name of the Service
+  namespace: default # Added namespace
+  labels:
+    app: postgres
+spec:
+  # ClusterIP is suitable for internal database access by Wiki.js
+  type: ClusterIP
+  ports:
+    - port: 5432 # Service port
+      targetPort: postgres # Refers to the container port named 'postgres' (port 5432)
+      protocol: TCP
+      name: postgres
+  selector:
+    app: postgres # Selects pods with the label app=postgres
+
+---
+# --- Wiki.js PersistentVolumeClaim ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wikijs-pvc # This name must match the claimName in your Wiki.js Deployment YAML
+  namespace: default # Added namespace
+  labels:
+    app: wikijs # Optional: Add labels for organization
+spec:
+  accessModes:
+    - ReadWriteOnce # Suitable for a single-replica deployment
+  resources:
+    requests:
+      storage: 5Gi # Request 5 Gigabytes of storage. Adjust this value as needed.
+  # storageClassName: standard # Optional: Uncomment and specify a StorageClass if you don't have a default one
+
+---
+# --- Wiki.js Deployment ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wikijs-deployment
+  namespace: default # Added namespace
+  labels:
+    app: wikijs
+spec:
+  replicas: 1 # Number of desired pods
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: wikijs
+  template:
+    metadata:
+      labels:
+        app: wikijs
+      annotations: {}
+    spec:
+      imagePullSecrets: []
+      serviceAccountName: default
+      securityContext: {}
+
+      containers:
+        - name: wikijs
+          securityContext: {}
+          image: requarks/wiki:2.5.307 # Wiki.js Docker image and tag
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000 # Wiki.js default port
+              name: http
+              protocol: TCP
+          env:
+            # --- Database Configuration ---
+            # Connecting to the PostgreSQL database deployed in the same cluster
+            - name: DB_TYPE
+              value: postgres
+            - name: DB_HOST
+              # Use the Kubernetes Service name for PostgreSQL
+              value: postgres-service # This must match the name of the PostgreSQL Service
+            - name: DB_PORT
+              value: "5432" # Default PostgreSQL port
+            - name: DB_NAME
+              value: wikijs # Must match the POSTGRES_DB value in the PostgreSQL Deployment
+            - name: DB_USER
+              value: wikijs # Must match the POSTGRES_USER value in the PostgreSQL Deployment
+            # Get the password from the Kubernetes Secret (same secret as PostgreSQL uses)
+            - name: DB_PASS
+              value: 1qaz2wsx!QAZ@WSX
+
+            # --- High Availability (if running multiple replicas) ---
+            # Set to "true" if replicaCount > 1 and you are using PostgreSQL
+            - name: HA_ACTIVE
+              value: "false" # Set to "true" if you increase replicas and use PostgreSQL
+
+            # --- Other Optional Environment Variables ---
+            # Uncomment and configure if needed
+            # - name: NODE_EXTRA_CA_CERTS
+            #   value: "/path/to/certs.pem"
+            # - name: LETSENCRYPT_DOMAIN
+            #   value: "wiki.your-domain.com"
+            # - name: LETSENCRYPT_EMAIL
+            #   value: "admin@your-domain.com"
+
+          volumeMounts:
+            - name: wikijs-data
+              mountPath: /wiki/data # Default data path for Wiki.js
+
+          # Basic health checks
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+
+          # Resource requests and limits (adjust based on your needs)
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1024Mi
+
+      volumes:
+        - name: wikijs-data
+          persistentVolumeClaim:
+            claimName: wikijs-pvc # Must match the name of the Wiki.js PVC
+
+---
+# --- Wiki.js Service (NodePort) ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wikijs-service
+  namespace: default # Added namespace
+  labels:
+    app: wikijs
+spec:
+  # Use NodePort for external access via a node's IP and a specific port
+  type: NodePort
+  ports:
+    - port: 80 # Service port
+      targetPort: http # Refers to the container port named 'http' (port 3000)
+      protocol: TCP
+      name: http
+      # nodePort: 30080 # Optional: Uncomment and specify a specific NodePort if desired
+  selector:
+    app: wikijs # Selects pods with the label app=wikijs
